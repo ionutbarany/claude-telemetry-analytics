@@ -1,0 +1,63 @@
+---
+description: Core stack and coding standards for the telemetry analytics platform
+alwaysApply: true
+---
+
+# Telemetry Analytics — Project Rules
+
+## Stack
+
+| Layer | Choice |
+|-------|--------|
+| Language | Python 3.12 |
+| API | FastAPI |
+| Data processing | Polars (prefer over Pandas) |
+| Dashboards | Streamlit + Plotly |
+| Database | PostgreSQL |
+| ORM / migrations | SQLAlchemy 2.0 + Alembic |
+
+## Architecture
+
+- Modular layout: separate packages for API, ingestion, transforms, storage, and dashboards.
+- Keep business logic out of route handlers and Streamlit pages; put it in service/domain modules.
+- Prefer small, composable modules over large monoliths.
+
+## Code quality
+
+- Every function: type hints on parameters and return values, plus a docstring.
+- Keep functions under 40 lines when possible; extract helpers instead of growing one block.
+- Comments only for non-obvious *why*; never narrate *what*.
+- Use the standard `logging` module; no `print` for operational output.
+- Write interview-ready code: clear names, explicit errors, no clever one-liners.
+
+## Configuration & secrets
+
+- Never hardcode file paths or credentials.
+- Read all config from environment variables (e.g. via `os.environ` or a settings object).
+- Fail fast with a clear error when required env vars are missing.
+
+## Data & persistence
+
+- Prefer Polars for DataFrames and ETL; use Pandas only when a dependency forces it.
+- Use SQLAlchemy 2.0 style (`select()`, mapped classes, sessions) — not legacy Query API.
+- Schema changes go through Alembic migrations; never mutate production schema ad hoc.
+
+## Testing
+
+- Write pytest tests for non-trivial logic (transforms, aggregations, validators, pricing/scoring).
+- Skip trivial getters/setters; cover edge cases and failure paths that matter.
+
+## Examples
+
+```python
+# ❌ BAD — no types, hardcoded path, print
+def load(path="C:/data/events.csv"):
+    print("loading")
+    return pl.read_csv(path)
+
+# ✅ GOOD
+def load_events(path: Path) -> pl.DataFrame:
+    """Load telemetry events from a CSV path provided by configuration."""
+    logger.info("Loading events from %s", path)
+    return pl.read_csv(path)
+```
