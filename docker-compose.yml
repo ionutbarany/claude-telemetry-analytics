@@ -31,6 +31,8 @@ services:
       context: .
       dockerfile: docker/api.Dockerfile
     container_name: telemetry-api
+    # Bind-mounting the repo over /app requires root in local dev (Windows volume perms).
+    user: "0:0"
     working_dir: /app
     env_file:
       - .env
@@ -54,6 +56,7 @@ services:
       context: .
       dockerfile: docker/dashboard.Dockerfile
     container_name: telemetry-dashboard
+    user: "0:0"
     working_dir: /app
     env_file:
       - .env

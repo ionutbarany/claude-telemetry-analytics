@@ -22,7 +22,7 @@ COPY app/ ./app/
 
 # Run as a dedicated non-root user to limit privilege if the container is compromised.
 RUN groupadd --system appuser \
-    && useradd --system --gid appuser --home /app appuser \
+    && useradd --system --gid appuser --home-dir /home/appuser --create-home appuser \
     && chown -R appuser:appuser /app
 
 USER appuser
