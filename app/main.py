@@ -9,6 +9,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.api.routes.analytics import router as analytics_router
+from app.api.routes.health import router as health_router
+
 API_VERSION = "0.1.0"
 SERVICE_NAME = "claude-telemetry-analytics-api"
 
@@ -55,10 +58,8 @@ def create_app() -> FastAPI:
             "status": "running",
         }
 
-    @application.get("/health")
-    def health() -> dict[str, str]:
-        """Return a simple liveness response for orchestrators."""
-        return {"status": "ok"}
+    application.include_router(health_router)
+    application.include_router(analytics_router)
 
     return application
 
