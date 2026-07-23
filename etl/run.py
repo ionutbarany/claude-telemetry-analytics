@@ -219,6 +219,60 @@ def cmd_sample(args: argparse.Namespace) -> int:
     return 0
 
 
+API_REQUEST_EVENT_NAME = "api_request"
+
+
+def parse_jsonl_events(path: Path) -> tuple[int, list[TelemetryEvent]]:
+    """Read and parse all telemetry events from a JSONL file.
+
+    Args:
+        path: Path to a telemetry JSONL file.
+
+    Returns:
+        Tuple of ``(records_read, parsed_events)``. Records that fail parsing are
+        logged and skipped.
+    """
+    records_read = 0
+    parsed_events: list[TelemetryEvent] = []
+
+    for record in read_jsonl(path):
+        records_read += 1
+        try:
+            prepared = prepare_record_for_parser(record)
+            parsed_events.append(parse_event(prepared))
+        except (TypeError, ValueError) as exc:
+            logger.warning("Skipping record %s in %s: %s", records_read, path, exc)
+
+    return records_read, parsed_events
+
+
+def cmd_load(args: argparse.Namespace) -> int:
+    """Load parsed API request telemetry events into PostgreSQL."""
+    input_path: Path = args.input
+    if not input_path.is_file():
+        logger.error("Input file does not exist: %s", input_path)
+        return 1
+
+    logger.info("Loading telemetry events from %s", input_path)
+    records_read, parsed_events = parse_jsonl_events(input_path)
+    api_request_events = [
+        event for event in parsed_events if event.event_name == API_REQUEST_EVENT_NAME
+    ]
+
+    from etl.loaders.postgres import insert_api_requests
+
+    try:
+        inserted = insert_api_requests(api_request_events)
+    except Exception:
+        logger.error("Failed to load api_request events into PostgreSQL")
+        return 1
+
+    print(f"Records read: {records_read}")
+    print(f"Events parsed: {len(parsed_events)}")
+    print(f"api_request events inserted: {inserted}")
+    return 0
+
+
 def cmd_inspect(args: argparse.Namespace) -> int:
     """Inspect the first records in a telemetry JSONL file."""
     input_path: Path = args.input
@@ -274,6 +328,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to a telemetry_logs.jsonl file.",
     )
     sample_parser.set_defaults(handler=cmd_sample)
+
+    load_parser = subparsers.add_parser(
+        "load",
+        help="Parse telemetry JSONL and load api_request events into PostgreSQL.",
+    )
+    load_parser.add_argument(
+        "--input",
+        type=Path,
+        required=True,
+        help="Path to a telemetry_logs.jsonl file.",
+    )
+    load_parser.set_defaults(handler=cmd_load)
 
     return parser
 
