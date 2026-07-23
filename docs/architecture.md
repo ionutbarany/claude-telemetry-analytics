@@ -4,6 +4,8 @@
 
 Build a production-style telemetry analytics platform that ingests event data, transforms it into analytically useful aggregates, persists results in PostgreSQL, exposes queryable APIs, and surfaces insights through interactive dashboards.
 
+> **MVP scope:** The running implementation loads `api_request` facts into `fact_api_requests`, enriches `dim_users` from `employees.csv`, and serves practice/level/trend analytics. The full star schema in `docs/data-model.md` describes the target roadmap.
+
 The system is designed as interview-ready engineering: modular packages, typed Python, environment-based configuration, and clear separation between ingestion, storage, API, and presentation layers.
 
 ---

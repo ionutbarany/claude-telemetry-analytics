@@ -58,6 +58,23 @@ Local orchestration uses **Docker Compose** (PostgreSQL 16, FastAPI, Streamlit) 
 
 **Prerequisites:** Docker and Docker Compose.
 
+### One-command bootstrap (recommended)
+
+```powershell
+# Windows
+.\scripts\bootstrap.ps1
+```
+
+```bash
+# Linux / macOS
+chmod +x scripts/bootstrap.sh
+./scripts/bootstrap.sh
+```
+
+This starts Compose, applies migrations, generates sample data when missing, and loads the warehouse with employee enrichment.
+
+### Manual setup
+
 ```bash
 # 1. Configure environment
 cp .env.example .env
@@ -71,8 +88,10 @@ docker compose exec api alembic upgrade head
 # 4. Generate sample data (if data/raw/ is empty)
 docker compose exec api python generate_fake_data.py
 
-# 5. Load api_request events into PostgreSQL
-docker compose exec api python -m etl.run load --input data/raw/telemetry_logs.jsonl
+# 5. Load api_request events and enrich dim_users from employees.csv
+docker compose exec api python -m etl.run load \
+  --input data/raw/telemetry_logs.jsonl \
+  --employees data/raw/employees.csv
 ```
 
 **Verify the stack:**
@@ -107,12 +126,13 @@ docker compose exec api python -m etl.run inspect \
 docker compose exec api python -m etl.run sample \
   --input data/raw/telemetry_logs.jsonl
 
-# Parse full file and insert api_request events into fact_api_requests
+# Parse full file, enrich dim_users, and insert api_request facts
 docker compose exec api python -m etl.run load \
-  --input data/raw/telemetry_logs.jsonl
+  --input data/raw/telemetry_logs.jsonl \
+  --employees data/raw/employees.csv
 ```
 
-The `load` command reports records read, events parsed, and rows inserted. Only `claude_code.api_request` events are persisted in the current schema.
+The `load` command reports records read, events parsed, `dim_users` upserts, and fact rows inserted. Only `api_request` events are persisted in the current MVP schema; employee CSV enrichment powers practice/level analytics.
 
 Optional logging verbosity: `--log-level DEBUG`
 
@@ -128,6 +148,9 @@ Base URL: `http://localhost:8000`
 | `GET` | `/analytics/overview` | Platform-wide totals (requests, cost, tokens, latency, users) |
 | `GET` | `/analytics/models` | Per-model request count, cost, and average latency |
 | `GET` | `/analytics/top-users` | Highest-spending users by total cost (`?limit=5`, max 100) |
+| `GET` | `/analytics/practices` | Cost and usage by engineering practice (employee enrichment) |
+| `GET` | `/analytics/levels` | Cost and usage by employee seniority level |
+| `GET` | `/analytics/trends` | Daily request volume and cost trends |
 
 **Examples:**
 
@@ -147,6 +170,10 @@ curl -s http://localhost:8000/analytics/overview | jq
 curl -s http://localhost:8000/analytics/models | jq
 
 curl -s "http://localhost:8000/analytics/top-users?limit=10" | jq
+
+curl -s http://localhost:8000/analytics/practices | jq
+
+curl -s http://localhost:8000/analytics/trends | jq
 ```
 
 `/health` returns HTTP 503 when the database probe fails. Interactive schema docs live at `/docs`.
@@ -157,11 +184,13 @@ curl -s "http://localhost:8000/analytics/top-users?limit=10" | jq
 
 Open **http://localhost:8501** after `docker compose up`.
 
-The Streamlit app reads from the FastAPI analytics layer (`http://api:8000` inside Compose). It shows:
+The Streamlit app reads from the FastAPI analytics layer (`http://api:8000` inside Compose). Use the sidebar **Persona** selector:
 
-- KPI cards — requests, cost, tokens, latency, unique users
-- Cost and request volume by model (Plotly bar charts)
-- Top users by spend
+| Persona | Focus |
+|---------|-------|
+| **Executive** | Platform KPIs and daily usage/cost trends |
+| **Engineering Manager** | Practice and level adoption, model usage |
+| **FinOps** | Spend by model, practice, and top users |
 
 Use the sidebar **Refresh** button to bypass the 60-second response cache after reloading data.
 
@@ -201,6 +230,16 @@ FROM fact_api_requests
 GROUP BY user_email
 ORDER BY total_cost_usd DESC
 LIMIT 10;
+
+-- Cost by practice (GET /analytics/practices)
+SELECT
+  d.practice,
+  COUNT(*)         AS requests,
+  SUM(f.cost_usd)  AS total_cost_usd
+FROM fact_api_requests f
+JOIN dim_users d ON d.email = f.user_email
+GROUP BY d.practice
+ORDER BY total_cost_usd DESC;
 ```
 
 Connect to PostgreSQL from the host:
@@ -216,14 +255,17 @@ docker compose exec postgres psql -U telemetry -d telemetry
 ```
 app/                 FastAPI application (routes, schemas, db models)
   api/routes/        REST endpoints (/health, /analytics/*)
+  services/          Analytics query layer
   db/                SQLAlchemy models, session factory
 etl/                 CLI and pipeline (parsers, transformers, loaders)
 dashboard/           Streamlit UI (Home.py)
 alembic/             Database migrations
 docker/              Container Dockerfiles
+scripts/             bootstrap.ps1 / bootstrap.sh one-command setup
+.cursor/             Agent rules and telemetry-dataset skill
 tests/               pytest suite
-docs/                Architecture and data-model reference
-data/raw/            Sample telemetry_logs.jsonl (gitignored; generate locally)
+docs/                Architecture, agent setup, LLM usage, presentation outline
+data/raw/            telemetry_logs.jsonl + employees.csv (gitignored)
 generate_fake_data.py  Synthetic dataset generator
 docker-compose.yml   Local stack definition
 ```
@@ -250,6 +292,22 @@ See `docs/architecture.md` and `docs/data-model.md` for the full star-schema roa
 
 ---
 
+## Agent setup (Cursor)
+
+This assignment requires a committed, reproducible agent configuration:
+
+| Asset | Path |
+|-------|------|
+| Project rules | `.cursor/rules/project-rules.mdc` |
+| Dataset skill | `.cursor/skills/telemetry-dataset/SKILL.md` |
+| Reproduction guide | `docs/agent-setup.md` |
+| LLM usage log | `docs/llm-usage.md` |
+| Presentation outline | `docs/presentation.md` |
+
+Open the repository in Cursor and refer to the skill when inspecting JSONL data, running ETL loads, or querying analytics endpoints.
+
+---
+
 ## Testing
 
 Tests use mocked database sessions — no running PostgreSQL required.
@@ -263,14 +321,13 @@ pytest
 docker compose exec api pytest
 ```
 
-Current coverage includes health check behavior and analytics overview response shape. Run `pytest -v` for per-test output.
+Current coverage includes health checks (200/503), analytics overview shape, practice/trend endpoints, ETL normalization, and employee CSV enrichment. Run `pytest -v` for per-test output.
 
 ---
 
 ## Future improvements
 
 - **Expand the star schema** — load `user_prompt`, `tool_result`, and `api_error` facts (see `docs/data-model.md`).
-- **Dimension enrichment** — join `employees.csv` for practice, level, and location rollups.
 - **Partitioning** — range-partition fact tables on `event_ts` for retention and query pruning.
 - **Materialized views** — precompute daily cost and token rollups for faster dashboard loads.
 - **Auth and TLS** — protect the API and dashboard for non-local deployments.

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 from pydantic import BaseModel, Field
 
 
@@ -33,3 +35,29 @@ class TopUserAnalyticsItem(BaseModel):
     total_tokens: int = Field(
         description="Sum of input and output tokens consumed by this user."
     )
+
+
+class PracticeAnalyticsItem(BaseModel):
+    """Per-practice cost and usage rollup."""
+
+    practice: str = Field(description="Engineering practice from employee enrichment.")
+    requests: int = Field(description="Number of API requests attributed to the practice.")
+    total_cost_usd: float = Field(description="Sum of estimated cost in USD for the practice.")
+    unique_users: int = Field(description="Distinct users in the practice with requests.")
+
+
+class LevelAnalyticsItem(BaseModel):
+    """Per-level cost and usage rollup."""
+
+    level: str = Field(description="Employee seniority level from employee enrichment.")
+    requests: int = Field(description="Number of API requests attributed to the level.")
+    total_cost_usd: float = Field(description="Sum of estimated cost in USD for the level.")
+    unique_users: int = Field(description="Distinct users at the level with requests.")
+
+
+class TrendAnalyticsItem(BaseModel):
+    """Daily request volume and cost trend point."""
+
+    event_date: date = Field(description="UTC calendar date for the aggregated bucket.")
+    requests: int = Field(description="Number of API requests on the date.")
+    total_cost_usd: float = Field(description="Sum of estimated cost in USD on the date.")

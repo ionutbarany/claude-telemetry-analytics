@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from etl.transformers.normalize import normalize_event_name
+
 
 @dataclass(frozen=True, slots=True)
 class TelemetryEvent:
@@ -50,7 +52,8 @@ def parse_event(record: dict) -> TelemetryEvent:
     attributes = _require_dict(first_event.get("attributes"), "logEvents[0].attributes")
     resource = _require_dict(record.get("resource"), "resource")
 
-    event_name = _require_non_empty_str(attributes.get("event.name"), "event.name")
+    raw_event_name = _require_non_empty_str(attributes.get("event.name"), "event.name")
+    event_name = normalize_event_name(raw_event_name)
     event_ts = _parse_timestamp(attributes.get("event.timestamp"), "event.timestamp")
     user_email = _resolve_user_email(attributes, resource)
     practice = _optional_str(resource.get("user.practice"))

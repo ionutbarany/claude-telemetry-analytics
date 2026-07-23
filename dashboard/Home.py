@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
 
 import plotly.express as px
 import requests
@@ -13,6 +13,14 @@ DEFAULT_API_BASE_URL = "http://api:8000"
 REQUEST_TIMEOUT_SECONDS = 30
 CACHE_TTL_SECONDS = 60
 TOP_USERS_LIMIT = 10
+
+Persona = Literal["Executive", "Engineering Manager", "FinOps"]
+
+PERSONA_DESCRIPTIONS: dict[Persona, str] = {
+    "Executive": "High-level platform KPIs and daily usage trends for leadership reviews.",
+    "Engineering Manager": "Practice and seniority breakdowns to compare team adoption and spend.",
+    "FinOps": "Cost concentration by model, user, and practice for budget oversight.",
+}
 
 
 class OverviewMetrics(TypedDict):
@@ -43,6 +51,32 @@ class TopUserMetrics(TypedDict):
     total_tokens: int
 
 
+class PracticeMetrics(TypedDict):
+    """Per-practice rollup from ``GET /analytics/practices``."""
+
+    practice: str
+    requests: int
+    total_cost_usd: float
+    unique_users: int
+
+
+class LevelMetrics(TypedDict):
+    """Per-level rollup from ``GET /analytics/levels``."""
+
+    level: str
+    requests: int
+    total_cost_usd: float
+    unique_users: int
+
+
+class TrendMetrics(TypedDict):
+    """Daily trend point from ``GET /analytics/trends``."""
+
+    event_date: str
+    requests: int
+    total_cost_usd: float
+
+
 def configure_page() -> None:
     """Apply global Streamlit page settings."""
     st.set_page_config(
@@ -56,42 +90,55 @@ def _analytics_url(base_url: str, path: str) -> str:
     return f"{base_url.rstrip('/')}{path}"
 
 
-@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
-def fetch_overview(base_url: str) -> OverviewMetrics:
-    """Fetch platform-wide KPI totals from the analytics API."""
+def _fetch_json(base_url: str, path: str, params: dict[str, Any] | None = None) -> Any:
+    """Perform a GET request against the analytics API and return JSON."""
     response = requests.get(
-        _analytics_url(base_url, "/analytics/overview"),
+        _analytics_url(base_url, path),
+        params=params,
         timeout=REQUEST_TIMEOUT_SECONDS,
     )
     response.raise_for_status()
     return response.json()
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
+def fetch_overview(base_url: str) -> OverviewMetrics:
+    """Fetch platform-wide KPI totals from the analytics API."""
+    return _fetch_json(base_url, "/analytics/overview")
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
 def fetch_models(base_url: str) -> list[ModelMetrics]:
     """Fetch per-model usage and cost rollups from the analytics API."""
-    response = requests.get(
-        _analytics_url(base_url, "/analytics/models"),
-        timeout=REQUEST_TIMEOUT_SECONDS,
-    )
-    response.raise_for_status()
-    return response.json()
+    return _fetch_json(base_url, "/analytics/models")
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
 def fetch_top_users(base_url: str, limit: int) -> list[TopUserMetrics]:
     """Fetch the highest-spending users ranked by total cost."""
-    response = requests.get(
-        _analytics_url(base_url, "/analytics/top-users"),
-        params={"limit": limit},
-        timeout=REQUEST_TIMEOUT_SECONDS,
-    )
-    response.raise_for_status()
-    return response.json()
+    return _fetch_json(base_url, "/analytics/top-users", params={"limit": limit})
 
 
-def render_sidebar() -> str:
-    """Render API configuration controls and return the active base URL."""
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
+def fetch_practices(base_url: str) -> list[PracticeMetrics]:
+    """Fetch practice-level cost and usage rollups."""
+    return _fetch_json(base_url, "/analytics/practices")
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
+def fetch_levels(base_url: str) -> list[LevelMetrics]:
+    """Fetch seniority-level cost and usage rollups."""
+    return _fetch_json(base_url, "/analytics/levels")
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
+def fetch_trends(base_url: str) -> list[TrendMetrics]:
+    """Fetch daily request and cost trends."""
+    return _fetch_json(base_url, "/analytics/trends")
+
+
+def render_sidebar() -> tuple[str, Persona]:
+    """Render sidebar controls and return the API base URL and selected persona."""
     st.sidebar.title("Settings")
     base_url = st.sidebar.text_input(
         label="API base URL",
@@ -99,12 +146,20 @@ def render_sidebar() -> str:
         help="FastAPI service root URL. Use http://api:8000 inside Docker.",
     )
 
+    persona: Persona = st.sidebar.radio(
+        label="Persona",
+        options=list(PERSONA_DESCRIPTIONS.keys()),
+        index=0,
+        help="Switch views to match how different stakeholders consume analytics.",
+    )
+    st.sidebar.caption(PERSONA_DESCRIPTIONS[persona])
+
     if st.sidebar.button("Refresh", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
     st.sidebar.caption(f"Cached responses expire after {CACHE_TTL_SECONDS} seconds.")
-    return base_url
+    return base_url, persona
 
 
 def _format_currency(value: float) -> str:
@@ -123,40 +178,17 @@ def render_kpi_cards(overview: OverviewMetrics) -> None:
     row_four_col, row_five_col, row_six_col = st.columns(3)
 
     with row_one_col:
-        st.metric(
-            label="Total Requests",
-            value=_format_integer(overview["total_requests"]),
-        )
-
+        st.metric(label="Total Requests", value=_format_integer(overview["total_requests"]))
     with row_two_col:
-        st.metric(
-            label="Total Cost",
-            value=_format_currency(overview["total_cost_usd"]),
-        )
-
+        st.metric(label="Total Cost", value=_format_currency(overview["total_cost_usd"]))
     with row_three_col:
-        st.metric(
-            label="Input Tokens",
-            value=_format_integer(overview["total_input_tokens"]),
-        )
-
+        st.metric(label="Input Tokens", value=_format_integer(overview["total_input_tokens"]))
     with row_four_col:
-        st.metric(
-            label="Output Tokens",
-            value=_format_integer(overview["total_output_tokens"]),
-        )
-
+        st.metric(label="Output Tokens", value=_format_integer(overview["total_output_tokens"]))
     with row_five_col:
-        st.metric(
-            label="Avg Latency",
-            value=f"{overview['avg_latency_ms']:,.1f} ms",
-        )
-
+        st.metric(label="Avg Latency", value=f"{overview['avg_latency_ms']:,.1f} ms")
     with row_six_col:
-        st.metric(
-            label="Unique Users",
-            value=_format_integer(overview["unique_users"]),
-        )
+        st.metric(label="Unique Users", value=_format_integer(overview["unique_users"]))
 
 
 def render_cost_by_model_chart(models: list[ModelMetrics]) -> None:
@@ -212,61 +244,186 @@ def render_top_users_table(top_users: list[TopUserMetrics]) -> None:
     st.dataframe(rows, use_container_width=True, hide_index=True)
 
 
-def load_dashboard_data(base_url: str) -> tuple[
-    OverviewMetrics | None,
-    list[ModelMetrics] | None,
-    list[TopUserMetrics] | None,
-]:
-    """Load all dashboard datasets, surfacing API failures via ``st.error``."""
-    overview: OverviewMetrics | None = None
-    models: list[ModelMetrics] | None = None
-    top_users: list[TopUserMetrics] | None = None
+def render_practice_chart(practices: list[PracticeMetrics]) -> None:
+    """Render cost by engineering practice."""
+    if not practices:
+        st.info("No practice enrichment data available. Load employees.csv during ETL.")
+        return
 
+    figure = px.bar(
+        practices,
+        x="practice",
+        y="total_cost_usd",
+        title="Total Cost by Practice",
+        labels={"practice": "Practice", "total_cost_usd": "Total Cost (USD)"},
+        color="practice",
+    )
+    figure.update_layout(showlegend=False)
+    st.plotly_chart(figure, use_container_width=True)
+
+
+def render_level_chart(levels: list[LevelMetrics]) -> None:
+    """Render cost by employee level."""
+    if not levels:
+        st.info("No level enrichment data available. Load employees.csv during ETL.")
+        return
+
+    figure = px.bar(
+        levels,
+        x="level",
+        y="total_cost_usd",
+        title="Total Cost by Level",
+        labels={"level": "Level", "total_cost_usd": "Total Cost (USD)"},
+        color="level",
+    )
+    figure.update_layout(showlegend=False)
+    st.plotly_chart(figure, use_container_width=True)
+
+
+def render_trend_charts(trends: list[TrendMetrics]) -> None:
+    """Render daily request and cost trend lines."""
+    if not trends:
+        st.info("No trend data available.")
+        return
+
+    cost_col, request_col = st.columns(2)
+    with cost_col:
+        figure = px.line(
+            trends,
+            x="event_date",
+            y="total_cost_usd",
+            title="Daily Cost Trend",
+            labels={"event_date": "Date", "total_cost_usd": "Cost (USD)"},
+            markers=True,
+        )
+        st.plotly_chart(figure, use_container_width=True)
+
+    with request_col:
+        figure = px.line(
+            trends,
+            x="event_date",
+            y="requests",
+            title="Daily Request Trend",
+            labels={"event_date": "Date", "requests": "Requests"},
+            markers=True,
+        )
+        st.plotly_chart(figure, use_container_width=True)
+
+
+def render_executive_view(base_url: str) -> None:
+    """Render leadership-focused KPIs and daily trends."""
     try:
         overview = fetch_overview(base_url)
     except requests.RequestException as exc:
         st.error(f"Failed to load overview metrics: {exc}")
+        return
+
+    st.subheader("Key metrics")
+    render_kpi_cards(overview)
+
+    try:
+        trends = fetch_trends(base_url)
+    except requests.RequestException as exc:
+        st.error(f"Failed to load trend analytics: {exc}")
+        return
+
+    st.subheader("Usage trends")
+    render_trend_charts(trends)
+
+
+def render_engineering_manager_view(base_url: str) -> None:
+    """Render practice and seniority views for engineering managers."""
+    practice_col, level_col = st.columns(2)
+
+    with practice_col:
+        try:
+            practices = fetch_practices(base_url)
+        except requests.RequestException as exc:
+            st.error(f"Failed to load practice analytics: {exc}")
+        else:
+            st.subheader("Cost by practice")
+            render_practice_chart(practices)
+
+    with level_col:
+        try:
+            levels = fetch_levels(base_url)
+        except requests.RequestException as exc:
+            st.error(f"Failed to load level analytics: {exc}")
+        else:
+            st.subheader("Cost by level")
+            render_level_chart(levels)
 
     try:
         models = fetch_models(base_url)
     except requests.RequestException as exc:
         st.error(f"Failed to load model analytics: {exc}")
+    else:
+        st.subheader("Model adoption")
+        render_requests_by_model_chart(models)
+
+
+def render_finops_view(base_url: str) -> None:
+    """Render cost concentration views for finance and platform owners."""
+    try:
+        overview = fetch_overview(base_url)
+    except requests.RequestException as exc:
+        st.error(f"Failed to load overview metrics: {exc}")
+        overview = None
+
+    if overview is not None:
+        fin_col_one, fin_col_two, fin_col_three = st.columns(3)
+        with fin_col_one:
+            st.metric("Total Spend", _format_currency(overview["total_cost_usd"]))
+        with fin_col_two:
+            st.metric("Billable Requests", _format_integer(overview["total_requests"]))
+        with fin_col_three:
+            st.metric("Active Users", _format_integer(overview["unique_users"]))
+
+    model_col, practice_col = st.columns(2)
+    with model_col:
+        try:
+            models = fetch_models(base_url)
+        except requests.RequestException as exc:
+            st.error(f"Failed to load model analytics: {exc}")
+        else:
+            st.subheader("Spend by model")
+            render_cost_by_model_chart(models)
+
+    with practice_col:
+        try:
+            practices = fetch_practices(base_url)
+        except requests.RequestException as exc:
+            st.error(f"Failed to load practice analytics: {exc}")
+        else:
+            st.subheader("Spend by practice")
+            render_practice_chart(practices)
 
     try:
         top_users = fetch_top_users(base_url, TOP_USERS_LIMIT)
     except requests.RequestException as exc:
         st.error(f"Failed to load top users: {exc}")
-
-    return overview, models, top_users
+    else:
+        st.subheader(f"Top {TOP_USERS_LIMIT} Users by Cost")
+        render_top_users_table(top_users)
 
 
 def main() -> None:
-    """Render the telemetry analytics overview dashboard."""
+    """Render the telemetry analytics dashboard for the selected persona."""
     configure_page()
-    base_url = render_sidebar()
+    base_url, persona = render_sidebar()
 
     st.title(PAGE_TITLE)
     st.markdown(
         "Live platform metrics sourced from the FastAPI analytics layer. "
-        "Explore request volume, token usage, cost, and top spenders."
+        "Switch personas in the sidebar to match your stakeholder view."
     )
 
-    overview, models, top_users = load_dashboard_data(base_url)
-
-    if overview is not None:
-        st.subheader("Key metrics")
-        render_kpi_cards(overview)
-
-    if models is not None:
-        cost_col, requests_col = st.columns(2)
-        with cost_col:
-            render_cost_by_model_chart(models)
-        with requests_col:
-            render_requests_by_model_chart(models)
-
-    if top_users is not None:
-        st.subheader(f"Top {TOP_USERS_LIMIT} Users by Cost")
-        render_top_users_table(top_users)
+    if persona == "Executive":
+        render_executive_view(base_url)
+    elif persona == "Engineering Manager":
+        render_engineering_manager_view(base_url)
+    else:
+        render_finops_view(base_url)
 
     st.divider()
     st.caption("Dashboard powered by FastAPI + PostgreSQL + Streamlit.")

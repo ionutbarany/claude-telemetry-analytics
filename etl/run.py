@@ -249,6 +249,7 @@ def parse_jsonl_events(path: Path) -> tuple[int, list[TelemetryEvent]]:
 def cmd_load(args: argparse.Namespace) -> int:
     """Load parsed API request telemetry events into PostgreSQL."""
     input_path: Path = args.input
+    employees_path: Path | None = args.employees
     if not input_path.is_file():
         logger.error("Input file does not exist: %s", input_path)
         return 1
@@ -259,16 +260,35 @@ def cmd_load(args: argparse.Namespace) -> int:
         event for event in parsed_events if event.event_name == API_REQUEST_EVENT_NAME
     ]
 
-    from etl.loaders.postgres import insert_api_requests
+    from etl.loaders.postgres import insert_api_requests, sync_dim_users_from_events
+    from etl.transformers.enrich import employees_by_email, load_employees_csv
+
+    employee_records = []
+    if employees_path is not None:
+        if not employees_path.is_file():
+            logger.error("Employee file does not exist: %s", employees_path)
+            return 1
+        try:
+            employee_records = load_employees_csv(employees_path)
+        except (FileNotFoundError, ValueError) as exc:
+            logger.error("Failed to load employees.csv: %s", exc)
+            return 1
+
+    employee_lookup = employees_by_email(employee_records)
 
     try:
+        users_upserted = sync_dim_users_from_events(
+            parsed_events,
+            employee_lookup,
+        )
         inserted = insert_api_requests(api_request_events)
     except Exception:
-        logger.error("Failed to load api_request events into PostgreSQL")
+        logger.error("Failed to load telemetry data into PostgreSQL")
         return 1
 
     print(f"Records read: {records_read}")
     print(f"Events parsed: {len(parsed_events)}")
+    print(f"dim_users rows upserted: {users_upserted}")
     print(f"api_request events inserted: {inserted}")
     return 0
 
@@ -338,6 +358,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         required=True,
         help="Path to a telemetry_logs.jsonl file.",
+    )
+    load_parser.add_argument(
+        "--employees",
+        type=Path,
+        default=None,
+        help="Optional path to employees.csv for dim_users enrichment.",
     )
     load_parser.set_defaults(handler=cmd_load)
 
